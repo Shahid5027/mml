@@ -1,0 +1,847 @@
+openapi: 3.0.0
+info:
+  title: 🛡️ GeoShield AI - Geofence Attendance API
+  description: >
+    Professional-grade, zero-trust API documentation for GeoShield AI.
+    Features browser fingerprint telemetry checks, server-side Haversine geodesic validations,
+    real-time anomaly detection alerts, and monthly RFC 4180 payroll CSV compilation exports.
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000/api
+    description: Local Sandbox Development server
+
+security:
+  - BearerAuth: []
+
+paths:
+  # =========================================================================
+  # AUTHENTICATION ENDPOINTS
+  # =========================================================================
+  /auth/login:
+    post:
+      summary: Authenticate user & register client fingerprint
+      description: >
+        Validates user credentials. If an unrecognized device fingerprint is provided in headers,
+        the system registers a confirmation trace or security alert before issuing JWT credentials.
+      security: []
+      parameters:
+        - name: X-Device-Fingerprint
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Client browser fingerprint hash generated via dynamic canvas/telemetry properties.
+        - name: X-Device-Name
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Human-readable device descriptor (e.g. Windows Chrome, macOS Safari).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: employee1@geoshield.ai
+                password:
+                  type: string
+                  format: password
+                  example: employee123
+      responses:
+        '200':
+          description: Login successful. Returns bearer JWT access token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Login successful
+                  token:
+                    type: string
+                    description: Signed JSON Web Token valid for 24 hours.
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid email or password, or unrecognized device trust verification block.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server database error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      summary: Fetch current authenticated user profile
+      description: Returns the parsed JWT payload information for active session verification.
+      responses:
+        '200':
+          description: Access token holds a valid active profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Missing or expired JWT Bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # =========================================================================
+  # ATTENDANCE ENDPOINTS
+  # =========================================================================
+  /attendance/check-in:
+    post:
+      summary: Submit a client geofenced check-in punch
+      description: >
+        Validates employee coordinates against active office boundaries via the Haversine formula.
+        Calculates shift tardiness bounds and logs punch parameters in the ledger and security insights engine.
+      parameters:
+        - name: X-Device-Fingerprint
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Browser signature to match against employee's registered trusted devices lists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - latitude
+                - longitude
+              properties:
+                latitude:
+                  type: number
+                  format: double
+                  minimum: -90.00
+                  maximum: 90.00
+                  example: 12.9715987
+                longitude:
+                  type: number
+                  format: double
+                  minimum: -180.00
+                  maximum: 180.00
+                  example: 77.5945627
+      responses:
+        '201':
+          description: Check-in complete and written to SQL audit ledger.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Check-in successful
+                  data:
+                    type: object
+                    properties:
+                      check_in_time:
+                        type: string
+                        format: date-time
+                      distance_from_office:
+                        type: number
+                        format: float
+                        description: Geodesic distance in meters rounded to two decimals.
+                        example: 14.52
+                      is_late:
+                        type: boolean
+                        description: True if time punched exceeds scheduled start plus tolerance minutes.
+                        example: false
+                      status:
+                        type: string
+                        enum: [PRESENT, LATE]
+                        example: PRESENT
+        '400':
+          description: Duplicate daily punch, out-of-bounds geofence drift, or invalid coordinate parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized.
+
+  /attendance/check-out:
+    post:
+      summary: Submit a client geofenced check-out punch
+      description: >
+        Enforces geofence validations on check-out. Calculates daily working hours server-side
+        completely based on checked database timestamps and records successful updates to the audit trails.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - latitude
+                - longitude
+              properties:
+                latitude:
+                  type: number
+                  format: double
+                  minimum: -90.00
+                  maximum: 90.00
+                  example: 12.9715987
+                longitude:
+                  type: number
+                  format: double
+                  minimum: -180.00
+                  maximum: 180.00
+                  example: 77.5945627
+      responses:
+        '200':
+          description: Check-out accepted and total hours calculated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Check-out successful
+                  data:
+                    type: object
+                    properties:
+                      check_out_time:
+                        type: string
+                        format: date-time
+                      working_hours:
+                        type: number
+                        format: float
+                        description: Hours calculated server-side, rounded to 2 decimal places.
+                        example: 9.05
+        '400':
+          description: Missing check-in record today, already checked out, or out-of-bounds geofence drift.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized.
+
+  /attendance/today:
+    get:
+      summary: Retrieve today's punch parameters and device trust statuses
+      description: Fetches daily active records for the logged-in employee to render buttons.
+      parameters:
+        - name: X-Device-Fingerprint
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: State found. Returns current checked variables.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hasCheckedIn:
+                    type: boolean
+                    example: true
+                  hasCheckedOut:
+                    type: boolean
+                    example: false
+                  checkInTime:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  checkOutTime:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  workingHours:
+                    type: number
+                    format: float
+                    nullable: true
+                  status:
+                    type: string
+                    enum: [PRESENT, LATE, ABSENT, INVALID]
+                    example: PRESENT
+                  deviceTrusted:
+                    type: boolean
+                    description: Flags if the current browser fingerprint matches trusted lists.
+                    example: true
+        '401':
+          description: Unauthorized.
+
+  /attendance/history:
+    get:
+      summary: Fetch entire chronological check-in logs history
+      description: Returns all user punch records joined with their real-time trust analysis scores.
+      responses:
+        '200':
+          description: List of historical records.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AttendanceHistoryRecord'
+        '401':
+          description: Unauthorized.
+
+  # =========================================================================
+  # GEOFENCE CONFIGURATION ENDPOINTS
+  # =========================================================================
+  /settings/office:
+    get:
+      summary: Retrieve active office landmark and rules config
+      description: Fetches latitude, longitude, radius boundaries, and late tolerance configs.
+      responses:
+        '200':
+          description: Current office settings properties.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OfficeSettings'
+        '401':
+          description: Unauthorized.
+    put:
+      summary: Update office geofence properties
+      description: Updates office GPS boundaries, allowed radius drift, and late thresholds. Enforces Admin role limits.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - latitude
+                - longitude
+                - radius_meters
+                - late_threshold_minutes
+              properties:
+                latitude:
+                  type: number
+                  format: double
+                  example: 12.9715987
+                longitude:
+                  type: number
+                  format: double
+                  example: 77.5945627
+                radius_meters:
+                  type: number
+                  format: float
+                  example: 200.00
+                late_threshold_minutes:
+                  type: integer
+                  example: 15
+      responses:
+        '200':
+          description: Settings updated successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Office settings updated successfully.
+                  settings:
+                    $ref: '#/components/schemas/OfficeSettings'
+        '400':
+          description: Missing or invalid body parameters.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Enforces strict administrative locks.
+
+  # =========================================================================
+  # ADMINISTRATION ENDPOINTS
+  # =========================================================================
+  /admin/attendance/today:
+    get:
+      summary: Fetch real-time workforce daily roster list
+      description: Pulls present, late, absent statistics and detailed records today. Requires Admin role.
+      responses:
+        '200':
+          description: Roster compiled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: object
+                    properties:
+                      totalCount:
+                        type: integer
+                        example: 2
+                      present:
+                        type: integer
+                        example: 2
+                      late:
+                        type: integer
+                        example: 0
+                      absent:
+                        type: integer
+                        example: 0
+                  records:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminDailyRosterRecord'
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden.
+
+  /admin/reports/monthly:
+    get:
+      summary: Fetch monthly compliance aggregates and data listings
+      description: Filters, compiles, and formats user timesheets. Used directly for CSV exports. Requires Admin role.
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+          description: Month to query in format YYYY-MM.
+          example: '2026-05'
+      responses:
+        '200':
+          description: Report structured data lists.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stats:
+                    type: object
+                    properties:
+                      avgAttendance:
+                        type: integer
+                        example: 95
+                      lateInstances:
+                        type: integer
+                        example: 2
+                      avgHours:
+                        type: number
+                        format: float
+                        example: 8.9
+                      avgAccuracy:
+                        type: number
+                        format: float
+                        example: 98.4
+                  records:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminMonthlyReportRecord'
+        '400':
+          description: Missing or malformed month query parameter.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden.
+
+  /admin/insights/feed:
+    get:
+      summary: Pull real-time chronological telemetry activity streams
+      description: Fetches successful punches, anomalous drifts, and unrecognized device logins. Requires Admin role.
+      responses:
+        '200':
+          description: Log feeds loaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  successLogs:
+                    type: array
+                    items:
+                      type: object
+                  anomalyAlerts:
+                    type: array
+                    items:
+                      type: object
+                  recentPunches:
+                    type: array
+                    items:
+                      type: object
+                  deviceAlerts:
+                    type: array
+                    items:
+                      type: object
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden.
+
+  /admin/employees:
+    get:
+      summary: Retrieve all employee accounts
+      description: Returns full directory lists. Requires Admin role.
+      responses:
+        '200':
+          description: Account list loaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  employees:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+    post:
+      summary: Create a new employee profile
+      description: Automatically hashes initial passwords securely. Requires Admin role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+                - password
+              properties:
+                name:
+                  type: string
+                  example: Alex Mercer
+                email:
+                  type: string
+                  format: email
+                  example: employee1@geoshield.ai
+                password:
+                  type: string
+                  example: employee123
+                role:
+                  type: string
+                  enum: [employee, admin]
+                  default: employee
+                  example: employee
+                department:
+                  type: string
+                  example: Engineering
+                shift_start_time:
+                  type: string
+                  pattern: '^\d{2}:\d{2}:\d{2}$'
+                  default: "09:00:00"
+                  example: "09:00:00"
+      responses:
+        '201':
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Employee account successfully created
+                  employee:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Body missing required fields, or email duplicate.
+        '401':
+          description: Unauthorized.
+
+  /admin/employees/{id}:
+    put:
+      summary: Update existing employee profile details
+      description: Edit email, name, role, department, or shift schedules. Requires Admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Target employee user ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+                - role
+              properties:
+                name:
+                  type: string
+                  example: Alex Mercer
+                email:
+                  type: string
+                  format: email
+                  example: employee1@geoshield.ai
+                role:
+                  type: string
+                  enum: [employee, admin]
+                  example: employee
+                department:
+                  type: string
+                  example: Engineering
+                shift_start_time:
+                  type: string
+                  pattern: '^\d{2}:\d{2}:\d{2}$'
+                  example: "09:00:00"
+      responses:
+        '200':
+          description: User updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Employee details updated successfully
+                  employee:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid parameters or email duplicate conflicts.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Target employee account not found.
+
+  /admin/attendance/{id}/invalidate:
+    put:
+      summary: Invalidate a physical check-in entry
+      description: Marks punch status as INVALID and registers an ADMIN_INVALIDATE event in the immutable audit log. Requires Admin role.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Target attendance entry ID.
+      responses:
+        '200':
+          description: Punch successfully invalidated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Attendance entry successfully marked as INVALID and logged in the audit trail.
+                  attendanceId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: INVALID
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Attendance record not found.
+
+# =========================================================================
+# COMPONENTS SCHEMAS
+# =========================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
+        name:
+          type: string
+          example: Alex Mercer
+        email:
+          type: string
+          format: email
+          example: employee1@geoshield.ai
+        role:
+          type: string
+          enum: [employee, admin]
+          example: employee
+        department:
+          type: string
+          example: Engineering
+        shift_start_time:
+          type: string
+          example: "09:00:00"
+
+    OfficeSettings:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        latitude:
+          type: string
+          description: High-precision decimal degrees.
+          example: "12.97159870"
+        longitude:
+          type: string
+          description: High-precision decimal degrees.
+          example: "77.59456270"
+        radius_meters:
+          type: string
+          description: Geofence radius allowance.
+          example: "200.00"
+        late_threshold_minutes:
+          type: integer
+          description: Minutes check-ins can slip past scheduled shifts.
+          example: 15
+
+    AttendanceHistoryRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: a1c85022-77cd-4c8d-b06f-42289ebbd241
+        date:
+          type: string
+          format: date
+          example: "2026-05-18"
+        checkInTime:
+          type: string
+          format: date-time
+          example: "2026-05-18T09:02:14.000Z"
+        checkOutTime:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-05-18T18:05:32.000Z"
+        workingHours:
+          type: number
+          format: float
+          nullable: true
+          example: 9.05
+        status:
+          type: string
+          enum: [PRESENT, LATE, ABSENT, INVALID]
+          example: PRESENT
+        confidenceScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 98
+        confidenceStatus:
+          type: string
+          enum: [High Confidence, New Device, Drift Warning, Drastic Drifts, Spoof Detected]
+          example: High Confidence
+
+    AdminDailyRosterRecord:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+          example: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
+        name:
+          type: string
+          example: Alex Mercer
+        email:
+          type: string
+          example: employee1@geoshield.ai
+        shift_start_time:
+          type: string
+          example: "09:00:00"
+        attendanceId:
+          type: string
+          format: uuid
+          nullable: true
+        checkIn:
+          type: string
+          format: date-time
+          nullable: true
+        checkOut:
+          type: string
+          format: date-time
+          nullable: true
+        workingHours:
+          type: number
+          format: float
+          nullable: true
+          example: 9.05
+        isLate:
+          type: boolean
+          example: false
+        status:
+          type: string
+          enum: [PRESENT, LATE, ABSENT, INVALID]
+          example: PRESENT
+        confidenceScore:
+          type: integer
+          example: 98
+        confidenceStatus:
+          type: string
+          example: High Confidence
+
+    AdminMonthlyReportRecord:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-05-18"
+        name:
+          type: string
+          example: Alex Mercer
+        email:
+          type: string
+          example: employee1@geoshield.ai
+        shiftStart:
+          type: string
+          example: "09:00:00"
+        checkIn:
+          type: string
+          example: "09:02:14"
+        checkOut:
+          type: string
+          example: "18:05:32"
+        status:
+          type: string
+          example: PRESENT
+        workingHours:
+          type: number
+          format: float
+          example: 9.05
+        distanceMeters:
+          type: number
+          format: float
+          example: 14.5
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid credentials.
