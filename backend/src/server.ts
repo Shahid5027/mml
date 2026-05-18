@@ -8,12 +8,33 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable Cross-Origin Resource Sharing (CORS) with support for customizable client origins
+// Configure a list of allowed origins (supporting both environment-specific production URLs and local hosts)
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.CLIENT_URL,
+].filter(Boolean) as string[];
+
+// Enable Cross-Origin Resource Sharing (CORS) with robust, dynamic verification
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      // Allow server-to-server or development requests without origin headers (e.g. Curl or Postman)
+      if (!origin) return callback(null, true);
+      
+      const isAllowed = allowedOrigins.some((allowed) => origin === allowed) ||
+                        origin.startsWith('http://localhost:') ||
+                        origin.endsWith('.vercel.app');
+      
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.warn(`⚠️ Blocked by CORS: Origin '${origin}' is not authorized.`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Fingerprint', 'X-Device-Name'],
+    credentials: true,
   })
 );
 
