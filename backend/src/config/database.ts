@@ -7,12 +7,16 @@ const { Pool } = pg;
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Connection pool setup, accommodating single-string DATABASE_URL or individual local options
+// Detect if we are connecting to a remote host (e.g. Render) to automatically enable SSL
+const isRemoteDb = process.env.DATABASE_URL && 
+  !process.env.DATABASE_URL.includes('localhost') && 
+  !process.env.DATABASE_URL.includes('127.0.0.1');
+
 const pool = new Pool(
   process.env.DATABASE_URL
     ? {
         connectionString: process.env.DATABASE_URL,
-        ssl: isProduction ? { rejectUnauthorized: false } : undefined,
+        ssl: (isProduction || isRemoteDb) ? { rejectUnauthorized: false } : undefined,
       }
     : {
         user: process.env.DB_USER || 'postgres',
