@@ -30,9 +30,6 @@ build/
 # macOS
 .DS_Store
 
-# Tailwind CSS
-postcss.config.js
-tailwind.config.js
 
 # Vite
 .vite
